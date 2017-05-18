@@ -1,0 +1,1667 @@
+---
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+inst---
+title: "PractML"
+author: "Cynthia de Nijs"
+date: "20 april 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Caret-package
+
+week 2 Practical Machine Learning (Coursera)
+
+
+```{r}
+
+library(ggplot2)
+library(caret)
+library(ISLR)
+library(Hmisc)
+library(gridExtra)
+library(splines)
+library(RANN)
+library(rattle)
+library(rpart.plot)
+library(ElemStatLearn)
+library(party)
+library(randomForest)
+library(gbm)
+library(quantmod)
+library(forecast)
+library(AppliedPredictiveModeling)
+library(e1071)
+library(Metrics)
+```
+
+
+# Dataset spam
+
+Deze dataset heeft 4601 rijen. De laatste kolom 'type' is de te voorspellen variabele
+
+
+
+```{r dataset SPAM}
+library(kernlab)
+data(spam)
+
+```
+
+# Dataset splitsen
+
+Er zijn verschillende manieren om trainings- en testsets te maken. spam$type is de outcomevector. Deze vector is van belang bij het maken van trainins- en testsets. De klassen in de outcomevector moeten goed verdeeld worden over de deelsets. De klassen van 'type' zijn Spam en Nonspam.
+
+createDataPartition()
+De functie createDataPartition() levert een lijst met het opgegeven % aan rijnummers, al dan niet in een List. 
+==Wat is een List? Wat is het verschil met een dataset? En een tabel? Kun je ze makkelijk in elkaar omzetten?
+
+
+```{r datapartitie}
+
+inTrain <- createDataPartition(y=spam$type, p=0.75, list=FALSE)
+
+training <- spam[inTrain,]
+test <- spam[-inTrain,]
+
+
+```
+Kfold
+De functie createFolds() 
+==De functies sapply, str en folds (is geen functie) doen niet wat ik verwacht. (zie slides week 2/7 1:30 week 2 data slicing)
+Er worden k trainings- en testsets gemaakt. De trainings- en testsets zijn onafhankelijk. 
+
+==hoe kan ik de 10 bestanden bekijken? niet door training <- spam[folds] dat levert een bestand op van 4601 rijen en 4601 kolommen...... knap he?
+
+```{r k-folds}
+
+folds <- createFolds(y=spam$type, k=10, list=FALSE, returnTrain = FALSE)
+
+str(folds)
+
+sapply(folds,length)
+
+
+folds[[1]][1:10]
+
+```
+
+# dataset Wage
+
+```{r dataset wage}
+data(Wage)
+summary(Wage)
+```
+
+# Dataset ontdekken
+
+Eerst een trainingsset en een testset maken. De testset wordt uitsluitend en alleen gebruikt om te testen. De data verkennen gebeurt dus op de trainingsset.
+```{r dataset wage splitsen}
+
+inTrain <- createDataPartition(y=Wage$wage, p=0.7, list=FALSE)
+training <- Wage[inTrain,]
+testing <- Wage[-inTrain,]
+
+```
+
+plots maken
+
+```{r}
+
+featurePlot(x=training[,c("age", "education", "jobclass")], y=training$wage, plot="pairs")
+
+```
+
+qplot met kleur
+
+```{r}
+
+qp <- qplot(age, wage, colour=jobclass, data=training)
+qp + geom_smooth(method='lm', formula=y~x)
+
+```
+
+# groepen maken voor bijvoorbeeld boxplots. De groepen bevatten evenveel elementen behalve als er veel waarden zijn met de grenswaarde. Zoals hier.
+
+```{r}
+
+cutWage <- cut2(training$wage, g=3)
+table(cutWage)
+
+p1 <- qplot(cutWage, age, data=training, fill=cutWage, geom=c("boxplot"))
+p2 <- qplot(cutWage, age, data=training, fill=cutWage, geom=c("boxplot", "jitter"))
+grid.arrange(p1, p2, ncol=2)
+
+```
+
+Of in een tabel met absolute of relatieve waarde (1 rij telt op tot 100%, 2 voor de kolommen)
+
+```{r}
+t1 <- table(cutWage, training$jobclass)
+t1
+prop.table(t1, 1)
+
+```
+
+densityplot: voor iedere waarde van educatie wordt een kansdichtheid van het salaris getekend.
+
+```{r}
+
+qplot(wage, colour=education, data=training, geom="density")
+
+```  
+#data bewerken
+
+als de waarden van een variabele scheef verdeeld zijn of enekele uitschieters heeft of er ontbreken waarden dan moet je daar wat aan doen.
+
+Het repareren van de testset moet obv van de reparaties van de trainingsset gebeuren. Je kunt de testset niet repareren onafhankelijk van de reparatie van de trainingsset.
+
+we bewerken de data van de spam-dataset.
+
+```{r}
+inTrain <- createDataPartition(y=spam$type, p=0.75, list=FALSE)
+
+training <- spam[inTrain,]
+test <- spam[-inTrain,]
+
+```
+ de waarden van de kolom capitalAve zijn scheef verdeeld. De meeste waarden liggen tussen de 0 en de 50 maar er zijn een paar uitschieters. Het gemiddelde is 4,7 en de SD=25,48.
+
+```{r}
+hist(training$capitalAve)
+
+```
+# standaardiseren "met de hand"
+ We gaan de waarden standaardiseren: (x-mu)/sigma
+ In de testset gaanm we de waarden van deze kolom standaardiseren met de mu en de sigma van de trainingsset!! Hierdoor zullen de gestandaardiseerde waarden in de testset waarschijnlijk geen gemiddelde 0 en sd=1 hebben.
+
+```{r}
+
+trainCapAve <- training$capitalAve
+trainCapAveS <- (trainCapAve - mean(trainCapAve))/sd(trainCapAve)
+mean(trainCapAveS)
+sd(trainCapAveS)
+
+testCapAve <- test$capitalAve
+testCapAveS <- (testCapAve - mean(trainCapAve))/sd(trainCapAve)
+mean(testCapAveS)
+sd(testCapAveS)
+```
+#standaardiseren met de preProcess-functie
+
+Standaardiseren kan ook met de preProcess-functie. We doen het hier voor alle kolommen behalve de prediction-kolom (type). de preProcess-functie geeft geen dataset terug. daarvoor hebben we de functie predict nodig: "preProcess results in a list with elements. predict.preProcess will produce a data frame."
+ 
+ De gedefinieerde standaardisatie (preObj) kun je vervolgens op iedere dataset loslaten. In dit geval op de trainingsset en op de testset.
+ 
+ 
+
+```{r}
+preObj <- preProcess(training[,-58], method=c("center", "scale"))
+
+trainCapAveS <- predict(preObj,training[,-58])$capitalAve
+testCapAveS <- predict(preObj,test[,-58])$capitalAve
+
+```
+#standaardiseren als argument in de train-functie
+
+
+```{r}
+
+modelFit <- train(type~., data=training, preProcess=c("center", "scale"), method="glm")
+
+```
+
+#normaliseren van de data met BoxCoxtransformaties
+
+Het normaliseren gebeurt met de max likelihoodschatter (ofzo)
+
+```{r}
+
+preObj <- preProcess(training[,-58], method=c("BoxCox"))
+trainCapAveS <- predict(preObj, training[,-58])$capitalAve
+
+par(mfrow=c(1,3)); hist(training$capitalAve); hist(trainCapAveS) ; qqnorm(trainCapAveS)
+
+```
+
+# ontbrekende data opvullen
+
+Dit kan bijvoorbeeld met behulp van knnImpute: k-nearest neighbour impute. Neem de k vectoren die het meest lijken op de vector met de ontbrekende waarde. Neem van de ontbrekende variabele de gemiddelde waarde van de k buren en gebruik deze waarde om de ontbrekende waarde te vullen.
+
+Omdat er in de dataset geen ontbrekende waarden zijn worden er eerst ontbrekende waarden gemaakt.
+
+package RANN noodzakelijk (als ie het morgen niet doet dan ook library(RANN) toevoegen.)
+
+```{r}
+training$capAve <- training$capitalAve
+selectNA <- rbinom(dim(training)[1], size=1,prob=0.05)==1
+training$capAve[selectNA] <- NA
+
+
+preObj <- preProcess(training[,-58], method="knnImpute")
+capAve <- predict(preObj, training[,-58])$capAve
+
+```
+# van ruwe data naar ordelijke data
+
+covariates, ookwel features of predictors genoemd zijn variabelen die de data het best beschrijven. Om te weten welke variabelen dat zijn is materiekennis vereist.
+
+afgeleide data toevoegen. bijvoorbeeld het kwadraat of derde macht van de variabele.
+```{r}
+
+spam$capitalAveSq <- spam$capitalAve^2
+
+```
+
+dummy varabelen toevoegen
+als je een factor hebt zet de methode die je gebruikt soms de factoren om in numerieke variabelen. Soms ook niet, dan moet je het zelf doen.
+Het omzetten van eeen factor naar een numerieke variabele heet one hot encoding.
+
+
+```{r}
+inTrain <- createDataPartition(y=Wage$wage, p=0.7, list=FALSE)
+training <- Wage[inTrain,]
+testing <- Wage[-inTrain,]
+
+table(training$jobclass)
+
+dummies <-dummyVars(wage~jobclass, data=training)
+head(predict(dummies,newdata=training))
+
+```
+
+zero covariates weggooien
+als een variabele bijna altijd dezelfde waarde heeft kun je m weggooien. in dit geval kunnen geslacht en regio eruit.
+
+```{r}
+nsv <- nearZeroVar(training, saveMetrics=TRUE)
+nsv
+
+```
+fitten met kromme lijnen
+
+Dit kan met basisfuncties. 
+de methode bs() berekent df polynomiale variabelen.
+
+```{r}
+
+bsBasis <- bs(training$age, df=3)
+bsBasis
+
+lm1 <- lm(wage ~ bsBasis, data=training)
+lm1
+plot(training$age, training$wage, pch=19, cex=0.5)
+points(training$age, predict(lm1, newdata=training), col="red", pch=19, cex=0.5)
+
+predict(bsBasis, age=testing$age)
+
+```
+#Principal Components Analysis
+
+variabelen die een hoge correlatie hebben wil je meestal niet allebei meenemen in je dataset
+
+```{r}
+#data(spam)
+inTrain <- createDataPartition(y=spam$type, p=0.75, list=FALSE)
+
+training <- spam[inTrain,]
+testing <- spam[-inTrain,]
+
+M <- abs(cor(training[,-58]))
+diag(M) <- 0
+which(M > 0.8, arr.ind=T)
+```
+
+we hebben nu 2 kolommen die sterk gecorreleerd zijn.
+
+
+```{r}
+
+names(spam)[c(34,32)]
+
+plot(spam[,34], spam[,32])
+
+```
+
+hoe kun je deze twee variabelen combineren tot een betere variabele
+reduceer aantal variabelen en reduceer noise.
+tel de variabelen bij elkaar op: X en trek ze van elkaar af: Y.
+X geeft meer info, Y minder (want je trekt ze van elkaar af.)
+
+
+```{r}
+X <- 0.71*training$num415 + 0.71*training$num857
+Y <- 0.71*training$num415 - 0.71*training$num857
+plot(X,Y)
+``` 
+
+het komt erop neer dat je n variabelen hebt X1 t/m Xn dus X1=(x11, X12, ....., X1m)
+ je kunt je probleem op 2 manieren beschrijven:
+ -vind een nieuwe set variabele die ongecorreleerd zijn en zoveel mogelijk variantie verklaren
+ -als je alle variabelen in een matrix zetvind dan de beste matrix die uit minder variabelen bestaat (lagere rang) en de originele data verklaart. 
+
+#Singulair Value Decompositie is een matrix decompositie.
+
+#Principal Components Analysis in R. 
+Je berekent de coefficienten van de twee variabelen zoals we hierboven 0,71 hebben gebruikt. (rotation)
+
+```{r}
+smallSpam <- spam[,c(34,32)]
+prComp <- prcomp(smallSpam)
+plot(prComp$x[,1], prComp$x[,2])
+
+prComp$rotation
+```
+
+#PCA, nu op de hele SPAMdata
+
+```{r}
+
+typeColor <- ((spam$type=="spam")*1+1)
+prComp <- prcomp(log10(spam[-58]+1))
+plot(prComp$x[,1],prComp$x[,2], col=typeColor,xlab="PC1", ylab="PC2")
+
+```
+dit kan ook met de preProcess-function   
+
+```{r}
+preProc <- preProcess(log10(spam[,-58]+1), method="pca", pcaComp=2)
+spamPC <- predict(preProc, log10(spam[,-58]+1))
+plot(spamPC[,1], spamPC[,2], col=typeColor)
+
+
+```
+
+#Je hebt uit de Spam-dataset 2 variabele gedestilleerd die de data het best omschrijven (preProc). Met deze twee variabelen ga je 'type' voorspellen.
+
+```{r}
+preProc <- preProcess(log10(spam[,-58]+1), method="pca", pcaComp=2)
+trainPC <- predict(preProc, log10(training[,-58]+1))
+modelFit <- train(y=training$type, method="glm", x=trainPC)
+
+testPC <- predict(preProc, log10(testing[,-58]+1))
+confusionMatrix(testing$type, predict(modelFit,testPC))
+
+```
+
+je kunt PCA ook als parameter meegeven in je preProcess functie.
+
+```{r}
+
+inTrain <- createDataPartition(y=spam$type, p=0.75, list=FALSE)
+training <- spam[inTrain,]
+testing <- spam[-inTrain,]
+
+modelFit <- train(y=training$type, method="glm", preProcess="pca", x=training )
+confusionMatrix(testing$type, predict(modelFit, testing))
+
+
+```
+
+# lineaire regressie
+
+makkelijk te interpreteren, 
+makkelijk te implementeren, 
+performed vaak slecht
+
+
+```{r}
+
+data(faithful)
+
+inTrain <- createDataPartition(y=faithful$waiting, p=0.5, list=FALSE)
+trainFaith <- faithful[inTrain,]
+testFaith <- faithful[-inTrain,]
+
+
+plot(trainFaith$waiting, trainFaith$eruptions, pch=19, col="blue", xlab="Waiting", ylab="Duration")
+
+
+```
+
+fit a lineair model.
+De coefficienten krijg je met de methode coef(lm1)[1] en coef(lm1)[2]
+
+
+```{r}
+#modelFit <- train(y=training[,58], method="glm", preProcess="pca", x=training )
+#confusionMatrix(testing$type, predict(modelFit, testing))
+lm1 <- lm(eruptions ~ waiting, data=trainFaith)
+summary(lm1)
+
+plot(trainFaith$waiting, trainFaith$eruptions, pch=19, col="blue", xlab="Waiting", ylab="Duration")
+lines(trainFaith$waiting,lm1$fitted, lwd=3)
+
+coef(lm1)[1] 
+coef(lm1)[2]
+```
+
+ook hier geldt dat je het model van de trainingsset gebruikt voor de testset.
+
+
+```{r}
+plot(trainFaith$waiting, trainFaith$eruptions, pch=19, col="blue", xlab="Waiting", ylab="Duration")
+lines(trainFaith$waiting,predict(lm1), lwd=3)
+
+plot(testFaith$waiting, testFaith$eruptions, pch=19, col="blue", xlab="Waiting", ylab="Duration")
+lines(testFaith$waiting,predict(lm1, newdata=testFaith), lwd=3)
+
+```
+
+de fout kan gemeten worden met de RMSE.Voor de testset maak je gebruik van het lineaire model van de trainigsset.
+
+```{r}
+sqrt(sum((lm1$fitted-trainFaith$eruption)^2))
+
+sqrt(sum((predict(lm1, newdata=testFaith)-testFaith$eruption)^2))
+```
+
+om te kijken of hoe goed je model het doet op andere datasets teken je de Prediction intervals in de plot van de testset. De meeste waarden moeten tussen deze 2 lijnen liggen.
+
+```{r}
+color <- c(1,2,2) 
+
+pred1 <- predict(lm1,newdata=testFaith, interval="prediction")
+ord <- order(testFaith$waiting)
+plot(testFaith$waiting, testFaith$eruptions, pch=19, col="blue")
+matlines(testFaith$waiting[ord],pred1[ord,], type="l",col=color,lty=c(1,1,1), lwd=3)
+
+
+```
+
+
+# lineaire regressie; Multiple Covariates
+
+aan de hand van dataset Wage gaan we lineaire regressie uitvoeren. De te voorspellen variabele is wage. de kolom logWage halen we uit de dataset. 
+
+```{r}
+data(Wage)
+Wage <- subset(Wage, select=-c(logwage))
+summary(Wage)
+
+```
+
+
+we maken weer een trainings- en een testset.
+
+```{r}
+inTrain <- createDataPartition(y=Wage$wage, p=0.7, list=FALSE)
+training <- Wage[inTrain,]
+testing <- Wage[-inTrain,]
+
+dim(training)
+dim(testing)
+
+```
+
+feature plot
+je ziet dat de salarissen voor "information" hoger zijn dan voor "industrial". de leeftijd tegen wage laat uitschieters zien. daar gaan we verder naar kijken.
+
+```{r}
+featurePlot(x=training[,c("age", "education", "jobclass")], y=training$wage, plot="pairs")
+
+```
+de uitschieters zouden we kyunnen modelleren. Daarvoor voegenb we een andere variabele toe.
+```{r}
+
+qplot(age, wage, data=training)
+
+```
+
+we voegen eerst jobclass toe, daarna education
+De meeste uitschieters komen van de information groep.
+```{r}
+qplot(age, wage, colour=jobclass, data=training)
+
+``` 
+
+
+
+
+ook hier zie je dat de toegevoegde variabele iets van de uitschieters verklaart.
+
+Een combinatie van jobclass en education moet toegevoegd worden aan het model.
+
+```{r}
+qplot(age, wage, colour=education, data=training)
+
+``` 
+
+we gaan nu een lineairmodel fitten.
+de factor-variabele Jobclass en eduacation wordt automatisch omgezet in 0-1 variabelen (Indicatorvariabele). Dat zou moeten betekenen dat het aantal variabelen niet meer 3 (age, Jobclass, education) meer is maar meer 10? age:1, jobclass: 1+2, education: 1+5 = 10.
+
+
+```{r}
+modFit <- train(wage ~ age + jobclass + education, method = "lm", data=training)
+finMod <- modFit$finalModel
+print(modFit)
+
+``` 
+
+
+diagnostische plots
+
+de gefitte waarden worden uitgezet tegen de residuen. Het model fit perfect als alle punt op de lijn Residuals=0 ligt. Je ziet dat er een aantal uitschieters zijn. Deze wil je nader bekijken. Misschien kun je ze verklaren door niet gebruikte variabelen.
+
+```{r}
+plot(finMod, 1, pch=19, cex=0.5)
+
+```
+
+we gaan ovenstaande plot nog een keer maken maar nu met niet gebruike variabele ras gekleurd. Je ziet dat ras de uitschieters gedeeltelijk verklaart.
+
+```{r}
+qplot(finMod$fitted, finMod$residuals, colour=race, data=training)
+
+```
+
+je kunt ook het nummer van het rijnummer (index) plotten tegen de residuen. Vaak is de dataset geordend naar tijd of leeftijd. De rijnummers zouden onafhankelijk moeten zijn van de residuen. Is er toch een verband dan mis je mogelijk een variabele. Soms zie je dat bijvoorbeeld de uitschieters in een bepaalde tijd voorkomen.
+Hier is geen vernad. In de cursus wel...
+
+```{r}
+plot(finMod$residuals, pch=19)
+
+```
+
+We zetten de voorspelde waarden af tegen de waarden in de (test)dataset. Deze waarden zouden heel dicht bij elkaar moeten liggen (op de diagonaal).
+
+Nu je de testset hebt gebruik mag je de testset niet meer gebruiken.
+
+```{r}
+pred <- predict(modFit, testing)
+qplot(wage, pred, colour=year, data=testing)
+
+```
+
+Je zou alle variabelen kunnen gebruiken om een model te maken.
+
+```{r}
+modFitAll <- train(wage ~ ., data=training, method="lm")
+
+pred <- predict(modFitAll, testing)
+qplot(wage, pred, data=testing)
+
+```
+
+##Test week 2
+
+```{r}
+library(AppliedPredictiveModeling)
+data(AlzheimerDisease)
+
+```
+
+vraag 2
+Zoiets als: is er een perfecte match tussen Age met index. Helpt het om Age als variabele toe te voegen. (ik viel over het woord Perfect, maar weet de vraag niet meer precies)
+hetzelfde voor FlyAsh. Achteraf zou ik zeggen dat je FlyAsh moet toevoegen als verklarende variabele.
+```{r}
+library(AppliedPredictiveModeling)
+data(concrete)
+library(caret)
+set.seed(1001)
+inTrain = createDataPartition(mixtures$CompressiveStrength, p = 3/4)[[1]]
+training = mixtures[ inTrain,]
+testing = mixtures[-inTrain,]
+
+
+
+plot(training$CompressiveStrength, pch=19)
+qplot(CompressiveStrength, FlyAsh, data=training)
+
+
+
+```
+
+
+```{r}
+training$cutCement <- with(training,cut2(training$Cement, g=3))
+training$index <- rownames(training)
+qplot(index, CompressiveStrength, colour=cutCement, data=training)
+```
+```{r}
+training$cutAge <- with(training,cut2(training$Age, g=3))
+qplot(index, CompressiveStrength, colour=cutAge, data=training)
+```
+
+```{r}
+training$cutFlyAsh <- with(training,cut2(training$FlyAsh, g=3))
+qplot(index, CompressiveStrength, colour=cutFlyAsh, data=training)
+```
+
+bij de volgende plaatjes bevatten de groepen (cuts) allemaal evenveel waarden van de CompressiveStrength. Maar dit vragen ze niet.....
+```{r}
+
+cutCompressiveStrength <- cut2(training$CompressiveStrength, g=3)
+table(cutCompressiveStrength)
+
+p1 <- qplot(cutCompressiveStrength, CompressiveStrength, data=training, fill=cutCompressiveStrength, geom=c("boxplot"))
+
+p2 <- qplot(cutCompressiveStrength, CompressiveStrength, data=training, fill=cutCompressiveStrength, geom=c("boxplot", "jitter"))
+
+grid.arrange(p1, p2, ncol=2)  
+```
+
+
+
+```{r}
+
+p1 <- qplot(cutCompressiveStrength, Age, data=training, fill=cutCompressiveStrength, geom=c("boxplot"))
+
+p2 <- qplot(cutCompressiveStrength, Age, data=training, fill=cutCompressiveStrength, geom=c("boxplot", "jitter"))
+
+grid.arrange(p1, p2, ncol=2)  
+```
+
+```{r}
+
+p1 <- qplot(cutCompressiveStrength, BlastFurnaceSlag, data=training, fill=cutCompressiveStrength, geom=c("boxplot"))
+
+p2 <- qplot(cutCompressiveStrength, BlastFurnaceSlag, data=training, fill=cutCompressiveStrength, geom=c("boxplot", "jitter"))
+
+grid.arrange(p1, p2, ncol=2)  
+```
+
+```{r}
+
+p1 <- qplot(cutCompressiveStrength, Cement, data=training, fill=cutCompressiveStrength, geom=c("boxplot"))
+
+p2 <- qplot(cutCompressiveStrength, Cement, data=training, fill=cutCompressiveStrength, geom=c("boxplot", "jitter"))
+
+grid.arrange(p1, p2, ncol=2)  
+```
+
+
+vraag 3
+helpt normaliseren om de scheefheid eruit te krijgen? Volgens mij een beetje. Je krijgt geen mooie normale verdeling maar hij is wel stukken normaler dan daarvoor.
+
+```{r}
+
+
+library(AppliedPredictiveModeling)
+data(concrete)
+library(caret)
+set.seed(1000)
+inTrain = createDataPartition(mixtures$CompressiveStrength, p = 3/4)[[1]]
+training = mixtures[ inTrain,]
+testing = mixtures[-inTrain,]
+
+
+```
+
+histogram tekenen lukt niet, densityplot wel.
+
+```{r}
+plot(density(training$Superplasticizer))
+#training <- data.frame(training)
+#training$SuperPlasticizerD <- training$SuperPlasticizer+1000
+#hist(as.numeric(training$SuperPlasticizer)*1000, breaks=5)
+
+```
+vraag 3 PCA
+
+```{r}
+library(caret)
+library(AppliedPredictiveModeling)
+set.seed(3433)
+data(AlzheimerDisease)
+adData <- data.frame(diagnosis,predictors)
+inTrain <- createDataPartition(adData$diagnosis, p = 3/4)[[1]]
+training <- adData[ inTrain,]
+testing <- adData[-inTrain,]
+
+```
+kolomnamen die beginnen met IL:  kolommen 58 tot en met 69
+met PCA in preProcess de infomratie uit deze kolommen halen. Hoeveel kolommen (pcaComp=?)
+heb je nodig om 80% van de variantie te verklaren.
+
+te verklaren variabele is diagnose (Control of Impaired)
+
+
+, pcaComp=10
+
+```{r}
+
+
+preProc <- preProcess(adData[,(58:69)]+1, method="pca", thresh=0.8)
+trainingPC <- predict(preProc, training[,(58:69)]+1)
+preProc
+
+modelFit <- train(y=training$diagnosis, method="glm", x=trainingPC)
+finMod <- modelFit$finalModel
+summary(modelFit)
+print(modelFit)
+
+confusionMatrix(training$diagnosis, predict(modelFit,trainingPC))
+
+#preProc <- preProcess(log10(spam[,-58]+1), method="pca", pcaComp=2)
+#trainPC <- predict(preProc, log10(training[,(58:60)]+1))
+#modelFit <- train(y=training$type, method="glm", x=trainPC)
+
+#testPC <- predict(preProc, log10(testing[,-58]+1))
+#confusionMatrix(testing$type, predict(modelFit,testPC))
+
+#modFit <- train(wage ~ age + jobclass + education, method = "lm", data=training)
+#finMod <- modFit$finalModel
+#print(modFit)
+
+#plot(trainingPC[,1], trainingPC[,2], col=typeColor)
+
+```
+
+vraag 5 maak behalve het model hierboven (gebruik glm) met 80% verklaarde variantie, ook een model waarbij je geen pca gebruikt.
+Wat is dan de Accuracy van beide modellen?
+
+```{r}
+
+library(caret)
+library(AppliedPredictiveModeling)
+set.seed(3433)
+data(AlzheimerDisease)
+adData = data.frame(diagnosis,predictors)
+inTrain = createDataPartition(adData$diagnosis, p = 3/4)[[1]]
+training = adData[ inTrain,]
+testing = adData[-inTrain,]
+
+```
+vraag 1
+
+```{r}
+library(AppliedPredictiveModeling)
+data(AlzheimerDisease)
+adData = data.frame(diagnosis,predictors)
+trainIndex = createDataPartition(diagnosis, p = 0.50, list=FALSE)
+training = adData[trainIndex,]
+testing = adData[-trainIndex,]
+
+```
+
+vraag 4 poging 2
+
+```{r}
+library(caret)
+library(AppliedPredictiveModeling)
+set.seed(3433)
+data(AlzheimerDisease)
+adData = data.frame(diagnosis,predictors)
+inTrain = createDataPartition(adData$diagnosis, p = 3/4)[[1]]
+training = adData[ inTrain,c(1,58:69)]
+testing = adData[-inTrain,c(1,58:69)]
+
+```
+
+```{r}
+preProc <- preProcess(adData[,(58:69)], method="pca", thresh=0.8)
+trainingPC <- predict(preProc, training[,-1])
+preProc
+
+```
+
+
+
+
+```{r}
+preProc <- preProcess(adData[,(58:69)], method="pca", pcaComp=9)
+trainingPC <- predict(preProc, training[,-1])
+preProc
+modelFit <- train(y=training[,1], x=trainingPC, method="glm")
+
+testPC <- predict(preProc, testing[,-1])
+
+#confusionMatrix(testing$diagnoses, predict(modelFit,testPC))
+
+finMod <- modelFit$finalModel
+summary(modelFit)
+print(modelFit)
+
+confusionMatrix(training$diagnosis, predict(modelFit,trainingPC))
+```
+niet met de preProcess maar met de train() methode. Geeft geen foutmelding op de confusionmatrix
+
+```{r}
+# Caret saves the pre-processing parameters 
+myFit <-  train( diagnosis~., data=training, 
+			          preProcess="pca", method="glm", 
+			          trControl=trainControl(preProcOptions = list(thresh = 0.8)) )
+
+# Any new data predicted will be pre-processed with the training parameters  
+confusionMatrix( predict(myFit,testing ), testing$diagnosis )
+confusionMatrix( predict(myFit,training ), training$diagnosis )
+```
+
+
+en nu zonder PCA, hier nog wel een foutmelkding in de confusionmatrix
+
+```{r}
+#preProc <- preProcess(adData[,(58:69)], method="pca", pcaComp=7)
+#trainingPC <- predict(preProc, training[,(58:69)])
+#preProc
+
+
+modelFit2 <- train(y=training$diagnosis, method="glm", x=training)
+#confusionMatrix(training$diagnosis, modelFit2)
+summary(modelFit2)
+print(modelFit2)
+
+
+modFitAll <- train(training[,-13],training[,13],method="glm")
+summary(modFitAll)
+print(modFitAll)
+
+#confusionMatrix(training$diagnosis, modFitAll)
+
+
+
+
+```
+
+#WEEK 3
+#Predicting with trees
+
+
+```{r}
+data(iris)
+names(iris)
+table(iris$Species)
+
+```
+trainings en testset maken
+
+```{r}
+inTrain <- createDataPartition(y=iris$Species, p = 0.70, list=FALSE)
+training <- iris[inTrain,]
+testing <- iris[-inTrain,]
+dim(training)
+dim(testing)
+
+```
+
+de breedte van de petals (bloembladen) en de sepal (kelkbladeren) plotten
+```{r}
+qplot(Petal.Width, Sepal.Width, colour=Species, data=training)
+
+```
+
+bla
+```{r}
+modFit <- train(Species ~., method="rpart", data=training)
+print(modFit$finalModel)
+
+```
+
+de boom plotten
+```{r}
+plot(modFit$finalModel, uniform=TRUE, main="ClassificationTree")
+text(modFit$finalModel, use.n=TRUE, all=TRUE, cex=.8)
+
+```
+
+bla
+```{r}
+fancyRpartPlot(modFit$finalModel)
+
+```
+
+model toepassen op een nieuwe dataset (=testset)
+```{r}
+predict(modFit, newdata=testing)
+
+```
+
+Hoe kan ik bekijken hoe goed het model het heeft gedaan
+```{r}
+confusionMatrix(predict(modFit, newdata=testing), testing$Species)
+
+```
+
+# Bagging
+bagging staat voor Bootstrap aggregating. Je gaat modellen van hetzekfde typen combineren om de variantie te verlagen. bias blijft hetzelfde.
+
+we gaan de temperatuur verklaren aan de hand van de hoeveelheid ozon.
+```{r}
+data(ozone, package="ElemStatLearn")
+ozone <- ozone[order(ozone$ozone),]
+head(ozone)
+
+```
+
+We gaan een matrix maken met in iedere rij(?) een prediction
+ss is een steekproef: dim(ozone) getallen van 1 tot dim(ozone), met terugleggen.
+Dus als dim = 5, dan 5 getallen van 1 tot 5 met terugleggen. Bijv 2,5,2,1,3 (denk ik)
+ozone0 is de 2e, 5e, 2e, 1e, 3e rij uit de dataset ozone. Je hebt de dataset ozone dus gehusseld (met terugleggen). Vervolgens sorteer je ozone0 op de waarden van ozone. ozone is nu geordend. Waar dat voor nodig is snap ik niet
+loes() is een polynomiale regressie.
+```{r}
+ll <- matrix(NA, nrow=10, ncol=155)
+for(i in 1:10) {
+  ss <- sample(1:dim(ozone)[1],replace=TRUE)
+  ozone0 <- ozone[ss,]
+  ozone0 <- ozone0[order(ozone0$ozone),]
+  loess0 <- loess(temperature ~ ozone, data=ozone0, span=.2)
+  ll[i,] <- predict(loess0, newdata=data.frame(ozone=1:155))
+  
+}
+
+```
+
+we hebben nu 10 keer de dataset gehusseld (met terugleggen) en 10 voorspellingen van de temperatuur gemaakt. Van de tien lijnen die dat oplevert wordt het gemiddelde genomen: 
+de bagged loess curve
+
+In de caret-package kun je de functie train gebruiken met de methods
+-bagEarth
+-treebag
+-bagFDA
+
+de functie bag() gebruiken en een willekeurig baggingmodel gebruiken.
+
+```{r}
+plot(ozone$ozone, ozone$temperature, pch=19, cex=0.5)
+for( i in 1:10) {
+  lines(1:155, ll[i,], col="grey", lwd=2)
+}
+lines(1:155, apply(ll,2,mean),col="red", lwd=2)
+```
+
+je kunt bagging ook zelf samenstellen (hoe zeg je dat) met de bag-function.
+B=10, dat is de 10 van hierboven, het aantal voorspellingen dat je gaat doen.
+Je gaat hier geen loess maar ctrees gebruiken.
+```{r}
+predictors = data.frame(ozone=ozone$ozone)
+temperature = ozone$temperature
+treebag <- bag(predictors, temperature, B=10, bagControl= 
+                 bagControl(fit = ctreeBag$fit, predict = ctreeBag$pred, aggregate = ctreeBag$aggregate))
+
+```
+
+we maken een plot van de uitkomst van het model hierboven. Grijs zijn de punten uit de data. Rood is een enkele voorspelling. Blauw is het gemiddelde
+```{r}
+plot(ozone$ozone, temperature, col='lightgrey', pch=19)
+points(ozone$ozone, predict(treebag$fits[[1]]$fit, predictors), pch=19, col="red")
+points(ozone$ozone, predict(treebag, predictors), pch=19, col="blue")
+
+```
+
+#RandomForest
+
+we maken een testset en een trainigsset van de Irisdataset
+```{r}
+data(iris)
+inTrain <- createDataPartition(y=iris$Species, p = 0.70, list=FALSE)
+training <- iris[inTrain,]
+testing <- iris[-inTrain,]
+dim(training)
+dim(testing)
+
+```
+
+met behulp van randomforest modeleren we de species. mtry de de zoveelste poging
+```{r}
+modFit <- train(Species ~., data=training, method="rf", prox=TRUE)
+modFit
+
+```
+bekijk 1 boom. we kijken naar de tweede. Iedere rij is een split, var is de variabele op basis waarvan wordt gesplitst. de split variabele en de kans dat je uit de split komt (?)
+
+```{r}
+getTree(modFit$finalModel, k=2)
+
+```
+
+
+met classCenter() wordt er per klasse een representatieve gekozen.
+```{r}
+irisP <- classCenter(training[,c(3,4)], training$Species, modFit$finalModel$prox)
+irisP <- as.data.frame(irisP)
+irisP$Species <- rownames(irisP)
+p <- qplot(Petal.Width, Petal.Length, col=Species, data=training)
+p + geom_point(aes(x=Petal.Width, y=Petal.Length, col=Species),size=5, shape=4, data=irisP)
+
+```
+
+we gaan de temperatuur verklaren aan de hand van de hoeveelheid ozon.
+```{r}
+pred <- predict(modFit, testing)
+testing$predRight <- pred==testing$Species
+table(pred, testing$Species)
+
+```
+
+we gaan de temperatuur verklaren aan de hand van de hoeveelheid ozon.
+```{r}
+qplot(Petal.Width, Petal.Length, colour=predRight, data=testing, main="newdata Predictions")
+
+```
+
+#Boosting
+
+bij boosting gaat het om zwakke voorspellers.
+nadat je de eerste voorspeller hebt gemaakt geef je de errors (niet-juist geschatte objecten) een hoger gewicht zodat ze in de volgende voorspeller een grotere kans maken om goed voorspeld te worden. Dat herhaal je een aantal keer. Vervolgens tel je de voorspellers gewogen bij elkaar op. De zwakke voorspellers samen vormen een sterke voorspeller.
+```{r}
+data(Wage)
+Wage <- subset(Wage, select=-c(logwage))
+
+inTrain <- createDataPartition(y=Wage$wage, p = 0.70, list=FALSE)
+training <- Wage[inTrain,]
+testing <- Wage[-inTrain,]
+
+```
+
+Fit the model with method "gbm". het aantal trees dat per keer wordt gebruikt verschilt.
+```{r}
+modFit <- train(wage ~., method="gbm", data=training, verbose=FALSE)
+print(modFit)
+
+```
+
+een plot van het resultaat:
+```{r}
+qplot(predict(modFit, testing), wage, data=testing)
+
+```
+# Model Based Proediction
+
+Model Based Prediction gaat ervan uit dat de data een probabilistic model volgen (Een model dat schat op basis van data uit het verleden. De kans wordt geschat dat een event zich opnieuw voordoet.) Het model gebruikt Bayes'stelling (P(A|B)= P(B|A)P(A)/P(B)) om de optimale classifiers te identificeren.
+```{r}
+data(iris)
+names(iris)
+table(iris$Species)
+
+```
+trainings en testset maken
+
+```{r}
+inTrain <- createDataPartition(y=iris$Species, p = 0.70, list=FALSE)
+training <- iris[inTrain,]
+testing <- iris[-inTrain,]
+dim(training)
+dim(testing)
+
+```
+
+we maken nu 2 modellen: een lineaire discriminant analysis (lda) en een Naiv Bayes (nb). Deze gaan we met elkaar vergelijken.
+
+
+```{r}
+modlda <- train(Species ~. , data=training, method="lda")
+modnb <- train(Species ~. , data=training, method="nb")
+predlda <- predict(modlda, testing)
+prednb <- predict(modnb, testing)
+table(predlda, prednb)
+
+```
+
+hier geven beide modellen dezelfde uitkomst. In de cursus is dat niet zo.... grrrrr....
+```{r}
+equalPredictions = (predlda==prednb)
+qplot(Petal.Width, Sepal.Width, colour=equalPredictions, data=testing)
+
+```
+
+we gaan de temperatuur verklaren aan de hand van de hoeveelheid ozon.
+```{r}
+
+
+```
+oudere versie van package installeren
+require(devtools)
+install_version("ggplot2", version = "0.9.1", repos = "http://cran.us.r-project.org")
+
+
+the devtools package and install_github('caret',subdir='R-package').
+
+
+```{r}
+#getTree(modFit$finalModel, k=2)
+
+```
+
+#Quiz week 3 
+
+opgave 1
+
+```{r}
+library(AppliedPredictiveModeling)
+data(segmentationOriginal)
+
+
+training <- segmentationOriginal[segmentationOriginal$Case=="Train",]
+testing <- segmentationOriginal[segmentationOriginal$Case=="Test",]
+dim(training)
+dim(testing)
+
+```
+```{r}
+set.seed(125)
+
+modFit <- train(Class ~., method="rpart", data=training)
+print(modFit$finalModel)
+
+
+```
+plot
+```{r}
+
+plot(modFit$finalModel, uniform=TRUE, main="ClassificationTree")
+text(modFit$finalModel, use.n=TRUE, all=TRUE, cex=.8)
+
+```
+geval 1 yes ps
+geval 2 no, no ws
+geval 3 no, yes ps
+geval 4 ...., yes ps
+
+```{r}
+fancyRpartPlot(modFit$finalModel)
+
+```
+op de testset:
+```{r}
+predict(modFit, newdata=testing)
+
+subsTest <- testing[,-c(4:49)]
+subsTest2 <- subsTest[,-c(5:56)]
+```
+
+vraag 3 
+
+```{r}
+library(pgmm)
+data(olive)
+olive = olive[,-1]
+```
+
+```{r}
+
+modFit1 <- train(Area ~., method="rpart", data=olive)
+print(modFit1$finalModel)
+
+```
+
+
+```{r}
+predict(modFit1, newdata=as.data.frame(t(colMeans(olive))))
+k <- as.data.frame(t(colMeans(olive)))
+
+predict(modFit1, newdata=olive)
+```
+
+
+```{r}
+fancyRpartPlot(modFit1$finalModel)
+
+```
+
+vraag 4
+
+```{r}
+library(ElemStatLearn)
+data(SAheart)
+set.seed(8484)
+train = sample(1:dim(SAheart)[1],size=dim(SAheart)[1]/2,replace=F)
+trainSA = SAheart[train,]
+testSA = SAheart[-train,]
+
+```
+
+dsf
+
+```{r}
+set.seed(13234)
+trainSA1 <- trainSA[,-c(4,5)]
+trainSA2 <- trainSA1[,-1]
+trainSA2$chd <- as.factor(trainSA2$chd)
+modFit <- train(chd ~. , method="glm", family="binomial", data=trainSA2)
+print(modFit$finalModel)
+```
+
+sad
+
+```{r}
+testSA1 <- testSA[,-c(4,5)]
+testSA2 <- testSA1[,-1]
+testSA2$chd <- as.factor(testSA2$chd)
+prediction <- predict(modFit, newdata=testSA2)
+values <- testSA2$chd
+```
+
+test: totaal 231 waarvan mis 72 is 31%
+trainig
+
+```{r}
+missClass <- function(values,prediction){sum(((prediction > 0.5)*1) != values)/length(values)}
+missClass(testSA2$chd,predict(modFit, newdata=testSA2) )
+
+table(prediction, testSA2$chd)
+table(modFit,trainSA2$chd )
+
+```
+
+vraag 5
+
+```{r}
+library(ElemStatLearn)
+data(vowel.train)
+data(vowel.test)
+
+```
+
+sdf
+
+
+```{r}
+set.seed(33833)
+modFit <- train(y ~. , method="rf",  importance=TRUE, data=vowel.train)
+print(modFit$finalModel)
+```
+
+awre
+
+```{r}
+varImp(modFit, scale=FALSE)
+
+```
+
+## week 4 Regularized regression
+
+als je een model hebt dat erg goed fit op de trainingsset is de bias laag. Hoe lager de bias hoe slechter het model zal fitten op de testset. De variantie (verschil in fitten tussen verschillende datasets) is dan groot. Heeft je model een kleinere variantie dan is de bias hoge. Je zoekt een balans tussen de bias (zo laag mogelijk) en de variantie (ook zo laag mogelijk). als de complexiteit van een model toeneemt (meer verklarende variabelen, of in het geval van regressie een hogere graads polynoom.) neemt de bias af maar de variantie toe.
+
+je kunt een model maken op alle variabelen en dan kijken hoeveel variabelen (k) een coefficient <>0 hebben. Vervolgens ga je alle modellen proberen met k variabelen.
+
+# regularization of regression
+als je model coefficienten heeft die groot zijn kun je die met een penalty verlagen. Als variabelen hoog gecorreleerd zijn dan kan dat hoge coefficienten geven. Om de bias/variantie balans goed te krijgen verlaag je de hoge coefficienten. (of zoiets) In plaats van het minimaliseren van het verschil van de waarde en de geschatte waarde minimaliseer je het verschil waarbij je een penalty geeft aan hoge coefficienten.
+
+methodes in caret die hoge coefficienten bestraffen zijn ridge(), lasso() en relaxo().
+
+
+# combining predictors
+model stacking
+je kunt twee modellen maken en vervolgens de uitkomsten van de 2 modellen in een dataframe stoppen. Je hebt dan een dataframe met 2 kolommen die allebei een schatter zijn van je te verklaren variabele. Vervolgens bouw je ene model dat als verklarende variabelen de dataframe heeft.
+
+```{r}
+data(Wage)
+Wage<- subset(Wage, select=-c(logwage))
+inBuild <- createDataPartition(y=Wage$wage, p=0.7, list=FALSE)
+validation <- Wage[-inBuild,]
+buildData <- Wage[inBuild,]
+inTrain <- createDataPartition(y=buildData$wage, p=0.7, list=FALSE)
+training <- buildData[inTrain,]
+testing <- buildData[-inTrain,]
+
+
+```
+
+we maken nu twee modellen om wage te verklaren: lineaire regressie en random forest.
+trainControl() zegt iets over de randomforest. Hoe subsets gemaakt moeten worden en hoeveel bomen.
+
+```{r}
+mod1 <- train(wage ~., method="glm", data=training)
+mod2 <- train(wage ~., method="rf", data=training, trControl=trainControl(method="cv"), number=3)
+```
+we zetten de twee voorspellingen tegen elkaar uit.
+
+```{r}
+pred1 <- predict(mod1, testing)
+pred2 <- predict(mod2, testing)
+qplot(pred1, pred2, colour=wage, data=testing)
+
+```
+nu gaan we een model maken dat beide modellen combineert.
+Eerst wordt een dataframe gemaakt met de 2 voorspellingen en de te verklaren variabelen: predDF "gam" = generalized additive model.
+
+```{r}
+predDF <- data.frame(pred1, pred2, wage=testing$wage)
+combModFit <- train(wage ~., method="gam", data=predDF)
+combPred <- predict(combModFit, predDF)
+
+```
+hoe scoren de modellen?
+
+```{r}
+sqrt(sum((pred1-testing$wage)^2))
+sqrt(sum((pred2-testing$wage)^2))
+sqrt(sum((combPred-testing$wage)^2))
+``` 
+nu gaan we testen op de validationset want we hebben de testset al gebruikt.
+
+```{r}
+pred1V <- predict(mod1, validation)
+pred2V <- predict(mod2, validation)
+predVDF <- data.frame(pred1=pred1V, pred2=pred2V)
+combPredV <- predict(combModFit, predVDF)
+```
+hoe scoren deze modellen?
+
+
+```{r}
+sqrt(sum((pred1V-validation$wage)^2))
+sqrt(sum((pred2V-validation$wage)^2))
+sqrt(sum((combPredV-validation$wage)^2))
+``` 
+
+# forecasting
+timeseries
+-trends
+-seizoenen
+-cyclussen (bijv van een jaar of meer)
+
+subsets maken is ingewikkelder. je kunt niet random een subset (testset) maken.
+
+```{r}
+from.dat <- as.Date("01/01/08", format="%m/%d/%y")
+to.dat <- as.Date("12/31/13", format="%m/%d/%y")
+getSymbols("GOOG", src="google", from=from.dat, to=to.dat)
+
+head(GOOG)
+```
+
+er wordt een gemiddelde per jaar berekend (apply.monthly) en "jaren gemaakt" door een frequentie van 12 te nemen.
+
+```{r}
+mGoog <- apply.monthly(GOOG, mean)
+googOpen <- Op(mGoog)
+ts1 <- ts(googOpen, frequency=12)
+plot(ts1, xlab="Years+1", ylab="GOOG")
+
+```
+hjk
+
+```{r}
+plot(decompose(ts1), xlab="Years+1")
+
+```
+als je tranings en testsets gaat maken kun je niet een steekproef nemen. je moet training op een periode en testen op de volgende periode.
+
+```{r}
+ts1Train <- window(ts1, start=1, end=5)
+ts1Test <- window(ts1, start=5, end=(7-0.01))
+ts1Train
+
+```
+hjk
+
+```{r}
+plot(ts1Train)
+lines(ma(ts1Train, order=3), col="red")
+
+```
+
+exponential smoothing: de forecast is blauw, de werkelijke waarden rood. je ziet in blauw de onzekerheid in je forecast. Best heftig.
+
+```{r}
+ets1 <- ets(ts1Train, model="MMM")
+fcast <- forecast(ets1)
+plot(fcast)
+lines(ts1Test, col="red")
+
+```
+
+
+wer
+
+
+```{r}
+accuracy(fcast, ts1Test)
+
+```
+
+#unsupervised prediction (je kent de labels niet)
+
+stel: je hebt de dataset met bloemen maar er is geen kolom "Species". Wat dan? Je probeert, bijvoorbeeld met k-means, zelf groepen te maken. de groepen/clusters geef je een naam. Met deze groepen werk je verder.
+
+
+```{r}
+data(iris)
+inTrain <- createDataPartition(y=iris$Species, p = 0.70, list=FALSE)
+training <- iris[inTrain,]
+testing <- iris[-inTrain,]
+dim(training)
+dim(testing)
+
+
+```
+
+cluster maken met K-means. we halen eerst de kolom Species eruit.
+
+
+```{r}
+kMeans1 <- kmeans(subset(training, select=-c(Species)), centers=3)
+training$clusters <- as.factor(kMeans1$cluster)
+qplot(Petal.Width, Petal.Length, colour=clusters, data=training)
+
+```
+
+#unsupervised
+
+
+```{r}
+table(kMeans1$cluster, training$Species)
+
+```
+
+nu ga je een model maken met de clusters.
+Daarna kijken hoe goed het model het heeft gedaan door de clusters te vergelijken met de waarden in de kolom Species.
+
+
+```{r}
+modFit <- train(clusters ~., data=subset(training, select=-c(Species)), method="rpart")
+table(predict(modFit, training), training$Species)
+
+```
+
+dit model laten we los op de testset
+
+```{r}
+testClusterPred <- predict(modFit, testing)
+table(testClusterPred, testing$Species)
+
+```
+
+#Quiz week 4
+
+vraag 1
+
+
+```{r}
+data(vowel.train)
+data(vowel.test)
+
+```
+
+accuracy rf op testset = 0.62
+accuracy gbm op testset = 0.52
+accuracy van de combi = 0.69
+
+
+
+```{r}
+set.seed(33833)
+
+vowel.train$y <- as.factor(vowel.train$y)
+vowel.test$y <- as.factor(vowel.test$y)
+
+fit_rf <- train(y ~., method="rf", data=vowel.train, prox=TRUE)
+pred_rf <- predict(fit_rf, newdata=vowel.test)
+confusionMatrix(pred_rf,vowel.test$y)
+
+
+fit_gbm <- train(y ~., method="gbm", data=vowel.train)
+pred_gbm <- predict(fit_gbm, vowel.test)
+confusionMatrix(pred_gbm,vowel.test$y)
+
+datacombined <- data.frame(pred_rf, pred_gbm, vowel.test$y)
+fit_combi <- train(vowel.test.y~., datacombined)
+pred_combi <- predict(fit_combi, vowel.test)
+confusionMatrix(pred_combi, vowel.test$y)
+
+```
+
+vraag 2
+
+
+```{r}
+set.seed(3433)
+data(AlzheimerDisease)
+adData <- data.frame(diagnosis, predictors)
+inTrain <- createDataPartition(adData$diagnosis, p=3/4)[[1]]
+training <- adData[inTrain,]
+testing <- adData[-inTrain,]
+
+```
+rf Accuracy : 0.7683 
+gbm Accuracy : 0.7927 
+lda Accuracy : 0.7683
+combi Accuracy : 0.8049
+
+```{r}
+set.seed(62433)
+fit_rf <- train(diagnosis ~., method="rf", data=training, prox=TRUE)
+pred_rf <- predict(fit_rf, newdata=testing)
+confusionMatrix(pred_rf,testing$diagnosis)
+
+
+fit_gbm <- train(diagnosis ~., method="gbm", data=training)
+pred_gbm <- predict(fit_gbm, testing)
+confusionMatrix(pred_gbm, testing$diagnosis)
+
+fit_lda <- train(diagnosis ~., method="lda", data=training)
+pred_lda <- predict(fit_lda, testing)
+confusionMatrix(pred_lda, testing$diagnosis)
+
+combinedset <- data.frame(pred_rf, pred_gbm, pred_lda, diagnosis = testing$diagnosis)
+combifit <- train(diagnosis~., combinedset, method="rf")
+pred_combi <- predict(combifit, testing)
+confusionMatrix(pred_combi, testing$diagnosis)
+```
+
+vraag 3
+fit_lda <- train(diagnosis ~., method="lda", data=training)
+pred_lda <- predict(fit_lda, testing)
+confusionMatrix(pred_lda,testing$diagnosis)
+
+```{r}
+set.seed(3523)
+library(AppliedPredictiveModeling)
+data(concrete)
+
+inTrain = createDataPartition(concrete$CompressiveStrength, p = 3/4)[[1]]
+training = concrete[ inTrain,]
+testing = concrete[-inTrain,]
+```
+
+lassomodel
+
+
+```{r}
+set.seed(233)
+
+fit <- train(CompressiveStrength ~., data=training, method="lasso")
+plot.enet(fit$finalModel, xvar="penalty", use.color=TRUE)
+```
+
+vraag 4
+
+
+```{r}
+library(lubridate) # For year() function below
+
+dat = read.csv("D:/Users/cynijs/Downloads/gaData (1).csv")
+
+training = dat[year(dat$date) < 2012,]
+
+testing = dat[(year(dat$date)) > 2011,]
+
+tstrain = ts(training$visitsTumblr)
+```
+
+
+```{r}
+mod <- bats(tstrain)
+fcast <- forecast.bats(mod, level=95, h=nrow(testing))
+acc <- accuracy(fcast, testing$visitsTumblr)
+
+count <- 0
+for (i in 1:nrow(testing)) {
+        if (testing$visitsTumblr[i] > fcast$lower[i]) {
+                if(testing$visitsTumblr[i] < fcast$upper[i]) {
+                count <- count + 1}
+        }
+}
+count/nrow(testing)
+```
+
+vraag 5
+
+
+```{r}
+set.seed(3523)
+
+library(AppliedPredictiveModeling)
+
+data(concrete)
+
+inTrain <- createDataPartition(concrete$CompressiveStrength, p = 3/4)[[1]]
+
+training <- concrete[ inTrain,]
+
+testing <- concrete[ -inTrain,]
+```
+dsf
+
+
+```{r}
+set.seed(325)
+svm.model <- svm(CompressiveStrength ~ ., data = training)
+svm.pred <- predict(svm.model, newdata=testing)
+svm.pred
+summary(svm.pred)
+rmse(svm.pred,testing$CompressiveStrength)
+```
+
+# project
+
+class-variabele voorspellen
+schrijf een rapport over hoe je het model hebt gebouwd
+hoe je cross validation hebt gebruikt
+wat je denkt dat de out of sample error is (?)
+waarom heb je de keuzes gemaakt die je hebt gemaakt.
+
+Data
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+What you should submit
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+Peer Review Portion
+
+Your submission for the Peer Review portion should consist of a link to a Github repo with your R markdown and compiled HTML file describing your analysis. Please constrain the text of the writeup to < 2000 words and the number of figures to be less than 5. It will make it easier for the graders if you submit a repo with a gh-pages branch so the HTML page can be viewed online (and you always want to make it easy on graders :-).
+
+Course Project Prediction Quiz Portion
+
+Apply your machine learning algorithm to the 20 test cases available in the test data above and submit your predictions in appropriate format to the Course Project Prediction Quiz for automated grading.
+
+Reproducibility
+
+Due to security concerns with the exchange of R code, your code will not be run during the evaluation by your classmates. Please be sure that if they download the repo, they will be able to view the compiled HTML version of your analysis.
+
+```{r}
+
+```
+
+dsf
+
+
